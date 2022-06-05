@@ -1,0 +1,91 @@
+#pragma kernel RenderMetaBall
+
+struct MetaBall
+{
+    float2 p;
+    float r;
+};
+
+struct LineSegment
+{
+    float2 u;
+    float2 v;
+};
+
+RWTexture2D<float4> Result;
+StructuredBuffer<MetaBall> balls;
+StructuredBuffer<int> startIndices;
+StructuredBuffer<int> lengths;
+int blockSize;
+int numXBlocks;
+int numYBlocks;
+int blockSearchRange;
+StructuredBuffer<LineSegment> lineSegments;
+float segmentThickness;
+uint ballCount;
+float threshold;
+
+float BallSDF(MetaBall ball, uint2 p)
+{
+    float dist = length(p - ball.p);
+    float value = ball.r / dist;
+    return value * (1 - smoothstep(threshold * 0.9, threshold, dist));
+}
+
+float DistanceToLineSegment(LineSegment l, float2 p)
+{
+    float2 diff = l.u - l.v;
+    float l2 = diff.x * diff.x + diff.y * diff.y;
+    if (l2 == 0)
+        return distance(p, l.u);
+
+    float t = max(0, min(1, dot(p - l.u, l.v - l.u) / l2));
+    float2 projection = l.u + t * (l.v - l.u);
+    return distance(p, projection);
+
+}
+
+[numthreads(8, 8, 1)]
+void RenderMetaBall(uint3 id : SV_DispatchThreadID)
+{
+    int blockX = id.x / blockSize;
+    int blockY = id.y / blockSize;
+    
+    float total = 0;
+    for (int xOff = -blockSearchRange; xOff <= blockSearchRange; xOff++)
+    {
+        int x = blockX + xOff;
+        if (x < 0 || x >= numXBlocks)
+            continue;
+
+        for (int yOff = -blockSearchRange; yOff <= blockSearchRange; yOff++)
+        {
+            int y = blockY + yOff;
+            if (y < 0 || y >= numYBlocks)
+                continue;
+
+            int index = y * numXBlocks + x;
+
+            int start = startIndices[index];
+            int stop = startIndices[index] + lengths[index];
+            for (int i = start; i < stop; i++)
+            {
+                float value = BallSDF(balls[i], id.xy);
+                total += value;
+            }
+        }
+    }
+
+    total = smoothstep(0.9, 1, total);
+    float3 color = total;
+
+    //float distance = 100000;
+    //for (uint j = 0; j < 4 * 7; j++)
+    //{
+    //    distance = min(distance, DistanceToLineSegment(lineSegments[j], id.xy));
+    //}
+
+    //color += distance < segmentThickness ? float3(0, 0, 1) : 0;
+
+    Result[id.xy] = float4(color, 1.0);
+}
